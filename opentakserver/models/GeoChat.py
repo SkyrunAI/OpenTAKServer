@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import DateTime, ForeignKey, Integer, String
+from sqlalchemy import DateTime, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from opentakserver.extensions import db
@@ -12,7 +12,9 @@ class GeoChat(db.Model):
     uid: Mapped[str] = mapped_column(String(255), primary_key=True)
     chatroom_id: Mapped[str] = mapped_column(String(255), ForeignKey("chatrooms.id"))
     sender_uid: Mapped[str] = mapped_column(String(255), ForeignKey("euds.uid", ondelete="CASCADE"))
-    remarks: Mapped[str] = mapped_column(String(255))
+    # Chat bodies routinely exceed 255 chars; a capped column made the
+    # parser drop long messages whole (insert error aborted routing).
+    remarks: Mapped[str] = mapped_column(Text)
     timestamp: Mapped[datetime] = mapped_column(DateTime)
     point_id: Mapped[int] = mapped_column(Integer, ForeignKey("points.id"))
     cot_id: Mapped[int] = mapped_column(Integer, ForeignKey("cot.id"))
