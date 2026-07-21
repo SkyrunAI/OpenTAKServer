@@ -156,7 +156,7 @@ class EudHandler(socketserver.BaseRequestHandler):
             )
 
             try:
-                self.request.send(event.encode())
+                self.request.sendall(event.encode())
                 return True
             except BaseException as e:
                 self.logger.error(f"Pong error: {e}")
@@ -336,7 +336,10 @@ class EudHandler(socketserver.BaseRequestHandler):
         try:
             body = json.loads(body)
             if body["uid"] != self.uid:
-                self.request.send(body["cot"].encode())
+                # sendall, not send: send() may write only part of the event
+                # under buffer pressure, silently dropping the rest AND
+                # corrupting the XML stream for everything that follows.
+                self.request.sendall(body["cot"].encode())
         except BaseException as e:
             self.logger.error(f"{self.callsign}: {e}, closing socket")
             self.close_connection()
@@ -525,7 +528,7 @@ class EudHandler(socketserver.BaseRequestHandler):
                     and platform != "DMRCOT"
                 ):
 
-                    self.logger.debug(f"Declaring queue for {self.callsign} {self.uid}")
+                    self.logger.info(f"Registration: declaring queues for {self.callsign} / {self.uid}")
                     self.rabbit_channel.queue_declare(queue=self.callsign)
                     self.rabbit_channel.queue_declare(queue=self.uid)
 
@@ -645,9 +648,11 @@ class EudHandler(socketserver.BaseRequestHandler):
                         self.rabbit_channel.basic_consume(
                             queue=self.callsign, on_message_callback=self.on_message, auto_ack=True
                         )
+                        self.logger.info(f"Registration: consuming {self.callsign}")
                         self.rabbit_channel.basic_consume(
                             queue=self.uid, on_message_callback=self.on_message, auto_ack=True
                         )
+                        self.logger.info(f"Registration: consuming {self.uid} - complete")
                         self.registered = True
 
             if "phone" in contact.attrs and contact.attrs["phone"]:
