@@ -83,6 +83,12 @@ class EudHandler(socketserver.BaseRequestHandler):
     eud = None
     callsign = None
     uid = None
+    # True only once this connection's RabbitMQ queues are declared, bound
+    # and consuming. Until then parse_device_info must keep being retried:
+    # the channel opens asynchronously just after accept(), so a client's
+    # first event can arrive before it's ready — registering only on the
+    # first event silently leaves such clients deaf for the whole connection.
+    registered = False
     bound_queues = []
     phone_number = None
     group_memberships = []
@@ -446,7 +452,7 @@ class EudHandler(socketserver.BaseRequestHandler):
         if self.pong(event):
             return
 
-        if event and not self.uid:
+        if event and (not self.uid or not self.registered):
             self.parse_device_info(event)
             # Close the DB connection once the EUD is authenticated and identified
             with self.app.app_context():
@@ -642,6 +648,7 @@ class EudHandler(socketserver.BaseRequestHandler):
                         self.rabbit_channel.basic_consume(
                             queue=self.uid, on_message_callback=self.on_message, auto_ack=True
                         )
+                        self.registered = True
 
             if "phone" in contact.attrs and contact.attrs["phone"]:
                 self.phone_number = contact.attrs["phone"]
