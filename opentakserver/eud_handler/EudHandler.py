@@ -83,6 +83,12 @@ class EudHandler(socketserver.BaseRequestHandler):
     eud = None
     callsign = None
     uid = None
+    # True only once this connection's RabbitMQ queues are declared, bound
+    # and consuming. Until then parse_device_info must keep being retried:
+    # the channel opens asynchronously just after accept(), so a client's
+    # first event can arrive before it's ready — registering only on the
+    # first event silently leaves such clients deaf for the whole connection.
+    registered = False
     bound_queues = []
     phone_number = None
     group_memberships = []
@@ -150,7 +156,7 @@ class EudHandler(socketserver.BaseRequestHandler):
             )
 
             try:
-                self.request.send(event.encode())
+                self.request.sendall(event.encode())
                 return True
             except BaseException as e:
                 self.logger.error(f"Pong error: {e}")
@@ -330,7 +336,10 @@ class EudHandler(socketserver.BaseRequestHandler):
         try:
             body = json.loads(body)
             if body["uid"] != self.uid:
-                self.request.send(body["cot"].encode())
+                # sendall, not send: send() may write only part of the event
+                # under buffer pressure, silently dropping the rest AND
+                # corrupting the XML stream for everything that follows.
+                self.request.sendall(body["cot"].encode())
         except BaseException as e:
             self.logger.error(f"{self.callsign}: {e}, closing socket")
             self.close_connection()
@@ -446,7 +455,7 @@ class EudHandler(socketserver.BaseRequestHandler):
         if self.pong(event):
             return
 
-        if event and not self.uid:
+        if event and (not self.uid or not self.registered):
             self.parse_device_info(event)
             # Close the DB connection once the EUD is authenticated and identified
             with self.app.app_context():
@@ -519,7 +528,7 @@ class EudHandler(socketserver.BaseRequestHandler):
                     and platform != "DMRCOT"
                 ):
 
-                    self.logger.debug(f"Declaring queue for {self.callsign} {self.uid}")
+                    self.logger.info(f"Registration: declaring queues for {self.callsign} / {self.uid}")
                     self.rabbit_channel.queue_declare(queue=self.callsign)
                     self.rabbit_channel.queue_declare(queue=self.uid)
 
@@ -639,9 +648,12 @@ class EudHandler(socketserver.BaseRequestHandler):
                         self.rabbit_channel.basic_consume(
                             queue=self.callsign, on_message_callback=self.on_message, auto_ack=True
                         )
+                        self.logger.info(f"Registration: consuming {self.callsign}")
                         self.rabbit_channel.basic_consume(
                             queue=self.uid, on_message_callback=self.on_message, auto_ack=True
                         )
+                        self.logger.info(f"Registration: consuming {self.uid} - complete")
+                        self.registered = True
 
             if "phone" in contact.attrs and contact.attrs["phone"]:
                 self.phone_number = contact.attrs["phone"]
